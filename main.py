@@ -9,7 +9,8 @@ load_dotenv()
  
 SETTINGS = BotFrameworkAdapterSettings(
     app_id=os.getenv("MICROSOFT_APP_ID"),
-    app_password=os.getenv("MICROSOFT_APP_PASSWORD")
+    app_password=os.getenv("MICROSOFT_APP_PASSWORD"),
+    channel_auth_tenant=os.getenv("TENANT_ID")
 )
  
 adapter = BotFrameworkAdapter(SETTINGS)
