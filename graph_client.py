@@ -1,5 +1,6 @@
 import os
 import io
+import logging
 import aiohttp
 import pdfplumber
 import docx
@@ -9,14 +10,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("graph_client")
+
 TENANT_ID = os.getenv("TENANT_ID")
 CLIENT_ID = os.getenv("MICROSOFT_APP_ID")
 CLIENT_SECRET = os.getenv("MICROSOFT_APP_PASSWORD")
 SHAREPOINT_HOSTNAME = os.getenv("SHAREPOINT_HOSTNAME")
 SHAREPOINT_SITE_NAME = os.getenv("SHAREPOINT_SITE_NAME")
-SHAREPOINT_FOLDER = os.getenv("SHAREPOINT_FOLDER_PATH", "IT Playbooks")
+SHAREPOINT_FOLDER = os.getenv("SHAREPOINT_FOLDER_PATH", "")
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+
+logger.info(f"SHAREPOINT_HOSTNAME={SHAREPOINT_HOSTNAME}")
+logger.info(f"SHAREPOINT_SITE_NAME={SHAREPOINT_SITE_NAME}")
+logger.info(f"SHAREPOINT_FOLDER={SHAREPOINT_FOLDER}")
 
 async def get_token():
     credential = ClientSecretCredential(TENANT_ID, CLIENT_ID, CLIENT_SECRET)
@@ -27,18 +35,28 @@ async def get_token():
 async def get_site_id():
     token = await get_token()
     url = f"{GRAPH_BASE}/sites/{SHAREPOINT_HOSTNAME}:/sites/{SHAREPOINT_SITE_NAME}"
+    logger.info(f"get_site_id URL: {url}")
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
             data = await resp.json()
+            logger.info(f"get_site_id response: {json.dumps(data, default=str)[:500]}")
             return data.get("id")
 
 async def list_playbooks():
     token = await get_token()
     site_id = await get_site_id()
-    url = f"{GRAPH_BASE}/sites/{site_id}/drive/root:/{SHAREPOINT_FOLDER}:/children"
+    logger.info(f"site_id: {site_id}")
+
+    if SHAREPOINT_FOLDER:
+        url = f"{GRAPH_BASE}/sites/{site_id}/drive/root:/{SHAREPOINT_FOLDER}:/children"
+    else:
+        url = f"{GRAPH_BASE}/sites/{site_id}/drive/root/children"
+
+    logger.info(f"list_playbooks URL: {url}")
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
             data = await resp.json()
+            logger.info(f"list_playbooks response: {json.dumps(data, default=str)[:1000]}")
             files = []
             for item in data.get("value", []):
                 name = item.get("name", "")
@@ -49,15 +67,29 @@ async def list_playbooks():
                         "size": item.get("size"),
                         "lastModified": item.get("lastModifiedDateTime")
                     })
+                else:
+                    files.append({
+                        "name": name + " [תיקייה]",
+                        "id": item.get("id"),
+                        "type": "folder"
+                    })
+            logger.info(f"Found files: {files}")
             return files
 
 async def search_playbooks(query: str):
     token = await get_token()
     site_id = await get_site_id()
-    url = f"{GRAPH_BASE}/sites/{site_id}/drive/root:/{SHAREPOINT_FOLDER}:/search(q='{query}')"
+
+    if SHAREPOINT_FOLDER:
+        url = f"{GRAPH_BASE}/sites/{site_id}/drive/root:/{SHAREPOINT_FOLDER}:/search(q='{query}')"
+    else:
+        url = f"{GRAPH_BASE}/sites/{site_id}/drive/root/search(q='{query}')"
+
+    logger.info(f"search_playbooks URL: {url}")
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
             data = await resp.json()
+            logger.info(f"search_playbooks response: {json.dumps(data, default=str)[:1000]}")
             files = []
             for item in data.get("value", []):
                 name = item.get("name", "")
@@ -72,8 +104,10 @@ async def read_file_content(file_id: str, file_name: str) -> str:
     token = await get_token()
     site_id = await get_site_id()
     url = f"{GRAPH_BASE}/sites/{site_id}/drive/items/{file_id}/content"
+    logger.info(f"read_file URL: {url}")
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers={"Authorization": f"Bearer {token}"}, allow_redirects=True) as resp:
+            logger.info(f"read_file status: {resp.status}")
             content = await resp.read()
 
     if file_name.endswith(".pdf"):
