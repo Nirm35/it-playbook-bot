@@ -126,3 +126,47 @@ async def list_onenote_pages(notebook_id: str = None) -> list:
         pages = []
         for section in sections_data.get("value", []):
             section_id = section.get("id")
+            section_name = section.get("displayName")
+            pages_url = f"{GRAPH_BASE}/sites/{await get_site_id()}/onenote/sections/{section_id}/pages"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(pages_url, headers={"Authorization": f"Bearer {token}"}) as resp:
+                    pages_data = await resp.json()
+            for page in pages_data.get("value", []):
+                pages.append({
+                    "id": page.get("id"),
+                    "title": page.get("title"),
+                    "section": section_name
+                })
+        return pages
+    else:
+        url = f"{GRAPH_BASE}/sites/{await get_site_id()}/onenote/pages"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
+                data = await resp.json()
+                return [{"id": p.get("id"), "title": p.get("title")} for p in data.get("value", [])]
+
+async def read_onenote_page(page_id: str) -> str:
+    token = await get_token()
+    url = f"{GRAPH_BASE}/sites/{await get_site_id()}/onenote/pages/{page_id}/content"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
+            html_content = await resp.text()
+    return _extract_text_from_html(html_content)
+
+async def search_onenote(query: str) -> list:
+    token = await get_token()
+    url = f"{GRAPH_BASE}/sites/{await get_site_id()}/onenote/pages?$search={query}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
+            data = await resp.json()
+            return [{"id": p.get("id"), "title": p.get("title")} for p in data.get("value", [])]
+
+def _extract_text_from_html(html: str) -> str:
+    import re
+    clean = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL)
+    clean = re.sub(r'<script[^>]*>.*?</script>', '', clean, flags=re.DOTALL)
+    clean = re.sub(r'<br\s*/?>', '\n', clean)
+    clean = re.sub(r'<p[^>]*>', '\n', clean)
+    clean = re.sub(r'<[^>]+>', '', clean)
+    clean = re.sub(r'\n{3,}', '\n\n', clean)
+    return clean.strip()
