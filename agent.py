@@ -17,7 +17,7 @@ client = AsyncAzureOpenAI(
 DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
 
 SYSTEM_PROMPT = """אתה סוכן IT מועיל של חברת Valinor Israel.
-תפקידך לעזור לצוות IT למצוא מידע מתוך Playbooks פנימיים השמורים ב-SharePoint.
+תפקידך לעזור לצוות IT למצוא מידע מתוך קבצים פנימיים השמורים ב-SharePoint.
 ענה תמיד בעברית אלא אם המשתמש פונה באנגלית.
 כשאתה מביא מידע מקובץ, ציין את שם הקובץ כמקור.
 אם לא מצאת מידע רלוונטי, אמור זאת בצורה ברורה."""
@@ -27,7 +27,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_playbooks",
-            "description": "מחזיר רשימה של כל קבצי ה-Playbook הזמינים ב-SharePoint",
+            "description": "מחזיר רשימה של כל הקבצים הזמינים בתיקיית SharePoint",
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
@@ -35,7 +35,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_playbooks",
-            "description": "מחפש קבצי Playbook לפי מילות מפתח",
+            "description": "מחפש קבצים בתיקיית SharePoint לפי מילות מפתח — מחזיר את כל סוגי הקבצים",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -49,7 +49,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "קורא את התוכן המלא של קובץ Playbook ספציפי",
+            "description": "קורא את התוכן המלא של קובץ ספציפי",
             "parameters": {
                 "type": "object",
                 "properties": {
