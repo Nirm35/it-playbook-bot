@@ -1,9 +1,7 @@
 import os
 import json
 from openai import AsyncAzureOpenAI
-from graph_client import (list_playbooks, search_playbooks, read_file_content,
-                          list_onenote_notebooks, list_onenote_pages,
-                          read_onenote_page, search_onenote)
+from graph_client import list_files, list_folder, search_files, read_file_content
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,31 +21,46 @@ SYSTEM_PROMPT = """אתה סוכן IT מועיל של חברת Valinor Israel.
 אם לא מצאת מידע רלוונטי, אמור זאת בצורה ברורה.
 
 ## איך לענות על שאלות:
-1. כשמשתמש שואל שאלה כלשהי — תמיד התחל עם list_playbooks כדי לקבל את רשימת כל הקבצים הזמינים.
-2. עיין בשמות הקבצים וזהה אילו קבצים עשויים להכיל מידע רלוונטי לשאלה.
-3. השתמש ב-read_file כדי לקרוא את התוכן של כל קובץ רלוונטי.
+1. כשמשתמש שואל שאלה — השתמש ב-search_files כדי לחפש קבצים רלוונטיים לפי מילות מפתח מהשאלה.
+2. אם החיפוש מצא קבצים — השתמש ב-read_file כדי לקרוא את התוכן שלהם.
+3. אם החיפוש לא מצא — השתמש ב-list_files כדי לראות מה יש בתיקייה, ואם יש תת-תיקייה רלוונטית השתמש ב-list_folder כדי לחפש בתוכה.
 4. ענה על השאלה לפי התוכן שקראת — לא לפי שם הקובץ בלבד.
-5. אם הקבצים ב-SharePoint לא הספיקו, חפש גם ב-OneNote עם search_onenote.
-6. אל תבקש מהמשתמש שם קובץ — אתה אמור למצוא את המידע בעצמך."""
+5. אל תבקש מהמשתמש שם קובץ — אתה אמור למצוא את המידע בעצמך.
+6. אם המשתמש שואל על נושא כללי כמו "budget" — חפש ותקרא מספר קבצים רלוונטיים.
+7. זכור את ההקשר מהשיחה — אם המשתמש שואל שאלת המשך, התייחס למה שדובר קודם."""
 
 TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "list_playbooks",
-            "description": "מחזיר רשימה של כל הקבצים הזמינים בתיקיית SharePoint. השתמש בזה תמיד כצעד ראשון.",
+            "name": "list_files",
+            "description": "מחזיר רשימה של כל הקבצים והתיקיות בתיקייה הראשית ב-SharePoint. השתמש בזה כדי לראות מה זמין.",
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
     {
         "type": "function",
         "function": {
-            "name": "search_playbooks",
-            "description": "מחפש קבצים בתיקיית SharePoint לפי מילות מפתח — מחזיר את כל סוגי הקבצים",
+            "name": "list_folder",
+            "description": "נכנס לתת-תיקייה ומחזיר את הקבצים שבתוכה. השתמש כשאתה רואה תיקייה רלוונטית ברשימה.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "מילות החיפוש"}
+                    "folder_name": {"type": "string", "description": "שם התת-תיקייה בדיוק כפי שהוא מופיע ברשימה"}
+                },
+                "required": ["folder_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_files",
+            "description": "מחפש קבצים בכל ה-SharePoint לפי מילות מפתח. מחפש בשמות קבצים ובתוכן. השתמש בזה כצעד ראשון בכל שאלה.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "מילות החיפוש באנגלית או בעברית"}
                 },
                 "required": ["query"]
             }
@@ -57,74 +70,31 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "קורא את התוכן המלא של קובץ לפי file_id ו-file_name. השתמש בזה כדי לקרוא את תוכן הקבצים ולמצוא מידע רלוונטי לשאלה.",
+            "description": "קורא את התוכן המלא של קובץ (PDF, Word, Excel, CSV, TXT). השתמש בזה אחרי שמצאת קובץ רלוונטי.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "file_id": {"type": "string", "description": "מזהה הקובץ"},
+                    "file_id": {"type": "string", "description": "מזהה הקובץ מהחיפוש או מרשימת הקבצים"},
                     "file_name": {"type": "string", "description": "שם הקובץ כולל סיומת"}
                 },
                 "required": ["file_id", "file_name"]
             }
         }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_onenote_notebooks",
-            "description": "מחזיר רשימה של כל ה-Notebooks ב-OneNote",
-            "parameters": {"type": "object", "properties": {}, "required": []}
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_onenote_pages",
-            "description": "מחזיר רשימת דפים מ-OneNote, אופציונלית לפי Notebook",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "notebook_id": {"type": "string", "description": "מזהה ה-Notebook (אופציונלי)"}
-                },
-                "required": []
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_onenote_page",
-            "description": "קורא את התוכן של דף OneNote ספציפי",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "page_id": {"type": "string", "description": "מזהה הדף"}
-                },
-                "required": ["page_id"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_onenote",
-            "description": "מחפש דפים ב-OneNote לפי מילות מפתח",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "מילות החיפוש"}
-                },
-                "required": ["query"]
-            }
-        }
     }
 ]
 
-async def run_agent(user_message: str) -> str:
+
+async def run_agent(user_message: str, history: list = None) -> str:
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_message}
+        {"role": "system", "content": SYSTEM_PROMPT}
     ]
+
+    # הוסף היסטוריית שיחה (בלי ההודעה הנוכחית שכבר נוספה)
+    if history and len(history) > 1:
+        for msg in history[:-1]:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+
+    messages.append({"role": "user", "content": user_message})
 
     for _ in range(10):
         response = await client.chat.completions.create(
@@ -150,22 +120,16 @@ async def run_agent(user_message: str) -> str:
 
     return "מצטער, לא הצלחתי לעבד את הבקשה. נסה שוב."
 
+
 async def _execute_tool(name: str, arguments: str) -> any:
     args = json.loads(arguments)
-    if name == "list_playbooks":
-        return await list_playbooks()
-    elif name == "search_playbooks":
-        return await search_playbooks(args["query"])
+    if name == "list_files":
+        return await list_files()
+    elif name == "list_folder":
+        return await list_folder(args["folder_name"])
+    elif name == "search_files":
+        return await search_files(args["query"])
     elif name == "read_file":
         content = await read_file_content(args["file_id"], args["file_name"])
         return {"file_name": args["file_name"], "content": content[:8000]}
-    elif name == "list_onenote_notebooks":
-        return await list_onenote_notebooks()
-    elif name == "list_onenote_pages":
-        return await list_onenote_pages(args.get("notebook_id"))
-    elif name == "read_onenote_page":
-        content = await read_onenote_page(args["page_id"])
-        return {"content": content[:8000]}
-    elif name == "search_onenote":
-        return await search_onenote(args["query"])
     return {"error": "unknown tool"}

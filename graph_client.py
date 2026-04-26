@@ -1,7 +1,7 @@
 import os
 import io
-import logging
 import json
+import logging
 import aiohttp
 import pdfplumber
 import docx
@@ -27,181 +27,156 @@ logger.info(f"SHAREPOINT_HOSTNAME={SHAREPOINT_HOSTNAME}")
 logger.info(f"SHAREPOINT_SITE_NAME={SHAREPOINT_SITE_NAME}")
 logger.info(f"SHAREPOINT_FOLDER={SHAREPOINT_FOLDER}")
 
+
 async def get_token():
     credential = ClientSecretCredential(TENANT_ID, CLIENT_ID, CLIENT_SECRET)
     token = await credential.get_token("https://graph.microsoft.com/.default")
     await credential.close()
     return token.token
 
+
 async def get_site_id():
     token = await get_token()
     url = f"{GRAPH_BASE}/sites/{SHAREPOINT_HOSTNAME}:/sites/{SHAREPOINT_SITE_NAME}"
-    logger.info(f"get_site_id URL: {url}")
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
             data = await resp.json()
-            logger.info(f"get_site_id response: {json.dumps(data, default=str)[:500]}")
+            logger.info(f"get_site_id: {data.get('id', 'NOT FOUND')}")
             return data.get("id")
 
-async def list_playbooks():
+
+async def list_files(folder_path: str = ""):
+    """מחזיר רשימת קבצים ותיקיות מתיקייה מסוימת"""
     token = await get_token()
     site_id = await get_site_id()
-    logger.info(f"site_id: {site_id}")
 
-    if SHAREPOINT_FOLDER:
-        url = f"{GRAPH_BASE}/sites/{site_id}/drive/root:/{SHAREPOINT_FOLDER}:/children"
+    target = folder_path or SHAREPOINT_FOLDER
+    if target:
+        url = f"{GRAPH_BASE}/sites/{site_id}/drive/root:/{target}:/children"
     else:
         url = f"{GRAPH_BASE}/sites/{site_id}/drive/root/children"
 
-    logger.info(f"list_playbooks URL: {url}")
+    logger.info(f"list_files URL: {url}")
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
             data = await resp.json()
-            logger.info(f"list_playbooks response: {json.dumps(data, default=str)[:1000]}")
-            files = []
-            for item in data.get("value", []):
-                name = item.get("name", "")
-                if not item.get("folder"):
-                    files.append({
-                        "name": name,
-                        "id": item.get("id"),
-                        "size": item.get("size"),
-                        "lastModified": item.get("lastModifiedDateTime")
-                    })
-                else:
-                    files.append({
-                        "name": name + " [תיקייה]",
-                        "id": item.get("id"),
-                        "type": "folder"
-                    })
-            logger.info(f"Found files: {files}")
-            return files
 
-async def search_playbooks(query: str):
+    items = []
+    for item in data.get("value", []):
+        name = item.get("name", "")
+        if item.get("folder"):
+            items.append({
+                "name": name,
+                "id": item.get("id"),
+                "type": "folder",
+                "childCount": item.get("folder", {}).get("childCount", 0)
+            })
+        else:
+            items.append({
+                "name": name,
+                "id": item.get("id"),
+                "type": "file",
+                "size": item.get("size"),
+                "lastModified": item.get("lastModifiedDateTime")
+            })
+    logger.info(f"list_files found {len(items)} items")
+    return items
+
+
+async def list_folder(folder_name: str):
+    """נכנס לתת-תיקייה וקורא את הקבצים שבתוכה"""
+    target = SHAREPOINT_FOLDER
+    if target:
+        full_path = f"{target}/{folder_name}"
+    else:
+        full_path = folder_name
+    return await list_files(folder_path=full_path)
+
+
+async def search_files(query: str):
+    """מחפש קבצים לפי מילות מפתח בכל ה-Drive"""
     token = await get_token()
     site_id = await get_site_id()
-
-    if SHAREPOINT_FOLDER:
-        url = f"{GRAPH_BASE}/sites/{site_id}/drive/root:/{SHAREPOINT_FOLDER}:/search(q='{query}')"
-    else:
-        url = f"{GRAPH_BASE}/sites/{site_id}/drive/root/search(q='{query}')"
-
-    logger.info(f"search_playbooks URL: {url}")
+    url = f"{GRAPH_BASE}/sites/{site_id}/drive/root/search(q='{query}')"
+    logger.info(f"search_files URL: {url}")
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
             data = await resp.json()
-            logger.info(f"search_playbooks response: {json.dumps(data, default=str)[:1000]}")
-            files = []
-            for item in data.get("value", []):
-                name = item.get("name", "")
-                if not item.get("folder"):
-                    files.append({
-                        "name": name,
-                        "id": item.get("id"),
-                    })
-            return files
+
+    files = []
+    for item in data.get("value", []):
+        name = item.get("name", "")
+        if not item.get("folder"):
+            files.append({
+                "name": name,
+                "id": item.get("id"),
+                "size": item.get("size"),
+                "path": item.get("parentReference", {}).get("path", "")
+            })
+    logger.info(f"search_files found {len(files)} files for query '{query}'")
+    return files
+
 
 async def read_file_content(file_id: str, file_name: str) -> str:
+    """קורא את תוכן הקובץ לפי סוג"""
     token = await get_token()
     site_id = await get_site_id()
     url = f"{GRAPH_BASE}/sites/{site_id}/drive/items/{file_id}/content"
-    logger.info(f"read_file URL: {url}")
+    logger.info(f"read_file: {file_name} ({file_id})")
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers={"Authorization": f"Bearer {token}"}, allow_redirects=True) as resp:
             logger.info(f"read_file status: {resp.status}")
             content = await resp.read()
 
-    if file_name.endswith(".pdf"):
+    lower = file_name.lower()
+    if lower.endswith(".pdf"):
         return _extract_pdf(content)
-    elif file_name.endswith(".docx"):
+    elif lower.endswith(".docx"):
         return _extract_docx(content)
-    elif file_name.endswith(".xlsx"):
+    elif lower.endswith(".doc"):
+        return "(קובץ .doc ישן — לא ניתן לקרוא. יש להמיר ל-.docx)"
+    elif lower.endswith(".xlsx") or lower.endswith(".xls"):
         return _extract_xlsx(content)
-    return ""
+    elif lower.endswith(".txt") or lower.endswith(".csv"):
+        return content.decode("utf-8", errors="replace")
+    else:
+        return f"(סוג קובץ לא נתמך: {file_name})"
+
 
 def _extract_pdf(content: bytes) -> str:
     text = []
-    with pdfplumber.open(io.BytesIO(content)) as pdf:
-        for page in pdf.pages:
-            t = page.extract_text()
-            if t:
-                text.append(t)
+    try:
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            for page in pdf.pages:
+                t = page.extract_text()
+                if t:
+                    text.append(t)
+    except Exception as e:
+        logger.error(f"PDF extraction error: {e}")
+        return f"(שגיאה בקריאת PDF: {e})"
     return "\n".join(text)
 
+
 def _extract_docx(content: bytes) -> str:
-    doc = docx.Document(io.BytesIO(content))
-    return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    try:
+        doc = docx.Document(io.BytesIO(content))
+        return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    except Exception as e:
+        logger.error(f"DOCX extraction error: {e}")
+        return f"(שגיאה בקריאת DOCX: {e})"
+
 
 def _extract_xlsx(content: bytes) -> str:
-    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-    lines = []
-    for sheet in wb.worksheets:
-        lines.append(f"Sheet: {sheet.title}")
-        for row in sheet.iter_rows(values_only=True):
-            row_text = " | ".join([str(c) for c in row if c is not None])
-            if row_text.strip():
-                lines.append(row_text)
-    return "\n".join(lines)
-
-async def list_onenote_notebooks() -> list:
-    token = await get_token()
-    url = f"{GRAPH_BASE}/sites/{await get_site_id()}/onenote/notebooks"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
-            data = await resp.json()
-            return [{"id": nb.get("id"), "name": nb.get("displayName")} for nb in data.get("value", [])]
-
-async def list_onenote_pages(notebook_id: str = None) -> list:
-    token = await get_token()
-    if notebook_id:
-        url = f"{GRAPH_BASE}/sites/{await get_site_id()}/onenote/notebooks/{notebook_id}/sections"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
-                sections_data = await resp.json()
-        pages = []
-        for section in sections_data.get("value", []):
-            section_id = section.get("id")
-            section_name = section.get("displayName")
-            pages_url = f"{GRAPH_BASE}/sites/{await get_site_id()}/onenote/sections/{section_id}/pages"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(pages_url, headers={"Authorization": f"Bearer {token}"}) as resp:
-                    pages_data = await resp.json()
-            for page in pages_data.get("value", []):
-                pages.append({
-                    "id": page.get("id"),
-                    "title": page.get("title"),
-                    "section": section_name
-                })
-        return pages
-    else:
-        url = f"{GRAPH_BASE}/sites/{await get_site_id()}/onenote/pages"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
-                data = await resp.json()
-                return [{"id": p.get("id"), "title": p.get("title")} for p in data.get("value", [])]
-
-async def read_onenote_page(page_id: str) -> str:
-    token = await get_token()
-    url = f"{GRAPH_BASE}/sites/{await get_site_id()}/onenote/pages/{page_id}/content"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
-            html_content = await resp.text()
-    return _extract_text_from_html(html_content)
-
-async def search_onenote(query: str) -> list:
-    token = await get_token()
-    url = f"{GRAPH_BASE}/sites/{await get_site_id()}/onenote/pages?$search={query}"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
-            data = await resp.json()
-            return [{"id": p.get("id"), "title": p.get("title")} for p in data.get("value", [])]
-
-def _extract_text_from_html(html: str) -> str:
-    import re
-    clean = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL)
-    clean = re.sub(r'<script[^>]*>.*?</script>', '', clean, flags=re.DOTALL)
-    clean = re.sub(r'<br\s*/?>', '\n', clean)
-    clean = re.sub(r'<p[^>]*>', '\n', clean)
-    clean = re.sub(r'<[^>]+>', '', clean)
-    clean = re.sub(r'\n{3,}', '\n\n', clean)
-    return clean.strip()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        lines = []
+        for sheet in wb.worksheets:
+            lines.append(f"Sheet: {sheet.title}")
+            for row in sheet.iter_rows(values_only=True):
+                row_text = " | ".join([str(c) for c in row if c is not None])
+                if row_text.strip():
+                    lines.append(row_text)
+        return "\n".join(lines)
+    except Exception as e:
+        logger.error(f"XLSX extraction error: {e}")
+        return f"(שגיאה בקריאת XLSX: {e})"
