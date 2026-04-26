@@ -20,14 +20,22 @@ SYSTEM_PROMPT = """אתה סוכן IT מועיל של חברת Valinor Israel.
 תפקידך לעזור לצוות IT למצוא מידע מתוך קבצים פנימיים השמורים ב-SharePoint.
 ענה תמיד בעברית אלא אם המשתמש פונה באנגלית.
 כשאתה מביא מידע מקובץ, ציין את שם הקובץ כמקור.
-אם לא מצאת מידע רלוונטי, אמור זאת בצורה ברורה."""
+אם לא מצאת מידע רלוונטי, אמור זאת בצורה ברורה.
+
+## איך לענות על שאלות:
+1. כשמשתמש שואל שאלה כלשהי — תמיד התחל עם list_playbooks כדי לקבל את רשימת כל הקבצים הזמינים.
+2. עיין בשמות הקבצים וזהה אילו קבצים עשויים להכיל מידע רלוונטי לשאלה.
+3. השתמש ב-read_file כדי לקרוא את התוכן של כל קובץ רלוונטי.
+4. ענה על השאלה לפי התוכן שקראת — לא לפי שם הקובץ בלבד.
+5. אם הקבצים ב-SharePoint לא הספיקו, חפש גם ב-OneNote עם search_onenote.
+6. אל תבקש מהמשתמש שם קובץ — אתה אמור למצוא את המידע בעצמך."""
 
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "list_playbooks",
-            "description": "מחזיר רשימה של כל הקבצים הזמינים בתיקיית SharePoint",
+            "description": "מחזיר רשימה של כל הקבצים הזמינים בתיקיית SharePoint. השתמש בזה תמיד כצעד ראשון.",
             "parameters": {"type": "object", "properties": {}, "required": []}
         }
     },
@@ -49,7 +57,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "קורא את התוכן המלא של קובץ ספציפי",
+            "description": "קורא את התוכן המלא של קובץ לפי file_id ו-file_name. השתמש בזה כדי לקרוא את תוכן הקבצים ולמצוא מידע רלוונטי לשאלה.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -118,7 +126,7 @@ async def run_agent(user_message: str) -> str:
         {"role": "user", "content": user_message}
     ]
 
-    for _ in range(5):
+    for _ in range(10):
         response = await client.chat.completions.create(
             model=DEPLOYMENT,
             messages=messages,
