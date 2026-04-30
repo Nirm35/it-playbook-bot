@@ -185,11 +185,28 @@ def _extract_xlsx(content: bytes) -> str:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
         lines = []
         for sheet in wb.worksheets:
-            lines.append(f"Sheet: {sheet.title}")
-            for row in sheet.iter_rows(values_only=True):
-                row_text = " | ".join([str(c) for c in row if c is not None])
-                if row_text.strip():
-                    lines.append(row_text)
+            lines.append(f"\n=== Sheet: {sheet.title} ===")
+            headers = []
+            for row_idx, row in enumerate(sheet.iter_rows(values_only=True), 1):
+                cells = [str(c) if c is not None else "" for c in row]
+                if row_idx == 1:
+                    # שורה ראשונה = כותרות עמודות
+                    headers = cells
+                    lines.append("כותרות: " + " | ".join(cells))
+                else:
+                    # שורות נתונים — מציג עם שם העמודה
+                    if not any(c.strip() for c in cells):
+                        continue  # דלג על שורות ריקות
+                    if headers:
+                        parts = []
+                        for h, c in zip(headers, cells):
+                            if c.strip():
+                                col_name = h if h.strip() else "עמודה"
+                                parts.append(f"{col_name}: {c}")
+                        if parts:
+                            lines.append(f"שורה {row_idx}: " + " | ".join(parts))
+                    else:
+                        lines.append(" | ".join(cells))
         return "\n".join(lines)
     except Exception as e:
         logger.error(f"XLSX extraction error: {e}")
