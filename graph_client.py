@@ -77,7 +77,8 @@ async def list_files(folder_path: str = ""):
                 "id": item.get("id"),
                 "type": "file",
                 "size": item.get("size"),
-                "lastModified": item.get("lastModifiedDateTime")
+                "lastModified": item.get("lastModifiedDateTime"),
+                "webUrl": item.get("webUrl", "")
             })
     logger.info(f"list_files found {len(items)} items")
     return items
@@ -111,36 +112,49 @@ async def search_files(query: str):
                 "name": name,
                 "id": item.get("id"),
                 "size": item.get("size"),
-                "path": item.get("parentReference", {}).get("path", "")
+                "path": item.get("parentReference", {}).get("path", ""),
+                "webUrl": item.get("webUrl", "")
             })
     logger.info(f"search_files found {len(files)} files for query '{query}'")
     return files
 
 
-async def read_file_content(file_id: str, file_name: str) -> str:
-    """קורא את תוכן הקובץ לפי סוג"""
+async def read_file_content(file_id: str, file_name: str) -> dict:
+    """קורא את תוכן הקובץ לפי סוג ומחזיר תוכן + לינק"""
     token = await get_token()
     site_id = await get_site_id()
-    url = f"{GRAPH_BASE}/sites/{site_id}/drive/items/{file_id}/content"
+
+    # קבל מטאדאטה של הקובץ כולל URL
+    meta_url = f"{GRAPH_BASE}/sites/{site_id}/drive/items/{file_id}"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(meta_url, headers={"Authorization": f"Bearer {token}"}) as resp:
+            meta = await resp.json()
+            web_url = meta.get("webUrl", "")
+
+    # הורד את תוכן הקובץ
+    content_url = f"{GRAPH_BASE}/sites/{site_id}/drive/items/{file_id}/content"
     logger.info(f"read_file: {file_name} ({file_id})")
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers={"Authorization": f"Bearer {token}"}, allow_redirects=True) as resp:
+        async with session.get(content_url, headers={"Authorization": f"Bearer {token}"}, allow_redirects=True) as resp:
             logger.info(f"read_file status: {resp.status}")
             content = await resp.read()
 
     lower = file_name.lower()
+    text = ""
     if lower.endswith(".pdf"):
-        return _extract_pdf(content)
+        text = _extract_pdf(content)
     elif lower.endswith(".docx"):
-        return _extract_docx(content)
+        text = _extract_docx(content)
     elif lower.endswith(".doc"):
-        return "(קובץ .doc ישן — לא ניתן לקרוא. יש להמיר ל-.docx)"
+        text = "(קובץ .doc ישן — לא ניתן לקרוא. יש להמיר ל-.docx)"
     elif lower.endswith(".xlsx") or lower.endswith(".xls"):
-        return _extract_xlsx(content)
+        text = _extract_xlsx(content)
     elif lower.endswith(".txt") or lower.endswith(".csv"):
-        return content.decode("utf-8", errors="replace")
+        text = content.decode("utf-8", errors="replace")
     else:
-        return f"(סוג קובץ לא נתמך: {file_name})"
+        text = f"(סוג קובץ לא נתמך: {file_name})"
+
+    return {"content": text, "webUrl": web_url}
 
 
 def _extract_pdf(content: bytes) -> str:
