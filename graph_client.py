@@ -187,16 +187,21 @@ def _extract_xlsx(content: bytes) -> str:
         for sheet in wb.worksheets:
             lines.append(f"\n=== Sheet: {sheet.title} ===")
             headers = []
-            for row_idx, row in enumerate(sheet.iter_rows(values_only=True), 1):
+            all_rows = list(sheet.iter_rows(values_only=True))
+            total_rows = len(all_rows)
+
+            for row_idx, row in enumerate(all_rows, 1):
                 cells = [str(c) if c is not None else "" for c in row]
                 if row_idx == 1:
-                    # שורה ראשונה = כותרות עמודות
                     headers = cells
                     lines.append("כותרות: " + " | ".join(cells))
                 else:
-                    # שורות נתונים — מציג עם שם העמודה
                     if not any(c.strip() for c in cells):
-                        continue  # דלג על שורות ריקות
+                        continue
+                    # בדוק אם זו שורת סיכום
+                    first_cell = cells[0].lower().strip()
+                    is_summary = first_cell in ["total", "סה\"כ", "סהכ", "sum", "totals"]
+
                     if headers:
                         parts = []
                         for h, c in zip(headers, cells):
@@ -204,9 +209,12 @@ def _extract_xlsx(content: bytes) -> str:
                                 col_name = h if h.strip() else "עמודה"
                                 parts.append(f"{col_name}: {c}")
                         if parts:
-                            lines.append(f"שורה {row_idx}: " + " | ".join(parts))
+                            prefix = f"⭐ שורה {row_idx} (סיכום)" if is_summary else f"שורה {row_idx}"
+                            lines.append(f"{prefix}: " + " | ".join(parts))
                     else:
                         lines.append(" | ".join(cells))
+
+            lines.append(f"(סה\"כ {total_rows} שורות בגיליון {sheet.title})")
         return "\n".join(lines)
     except Exception as e:
         logger.error(f"XLSX extraction error: {e}")
