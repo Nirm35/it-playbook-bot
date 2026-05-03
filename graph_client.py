@@ -131,13 +131,26 @@ async def read_file_content(file_id: str, file_name: str) -> dict:
             meta = await resp.json()
             web_url = meta.get("webUrl", "")
 
-    # הורד את תוכן הקובץ
+    # הורד את תוכן הקובץ - עם retry
     content_url = f"{GRAPH_BASE}/sites/{site_id}/drive/items/{file_id}/content"
     logger.info(f"read_file: {file_name} ({file_id})")
-    async with aiohttp.ClientSession() as session:
-        async with session.get(content_url, headers={"Authorization": f"Bearer {token}"}, allow_redirects=True) as resp:
-            logger.info(f"read_file status: {resp.status}")
-            content = await resp.read()
+    content = None
+    for attempt in range(3):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(content_url, headers={"Authorization": f"Bearer {token}"}, allow_redirects=True) as resp:
+                    logger.info(f"read_file attempt {attempt+1} status: {resp.status}")
+                    if resp.status == 200:
+                        content = await resp.read()
+                        if content and len(content) > 0:
+                            break
+        except Exception as e:
+            logger.error(f"read_file attempt {attempt+1} error: {e}")
+        import asyncio as aio
+        await aio.sleep(1)
+
+    if not content:
+        return {"content": "(שגיאה בהורדת הקובץ — נסה שוב)", "webUrl": web_url}
 
     lower = file_name.lower()
     text = ""
@@ -184,8 +197,13 @@ def _extract_xlsx(content: bytes) -> str:
     try:
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
         lines = []
+        full_lines = []
+        summary_keywords = ["total", "סה\"כ", "סהכ", "sum", "totals", "grand total"]
+
         for sheet in wb.worksheets:
-            lines.append(f"\n=== Sheet: {sheet.title} ===")
+            sheet_header = f"\n=== Sheet: {sheet.title} ==="
+            lines.append(sheet_header)
+            full_lines.append(sheet_header)
             headers = []
             all_rows = list(sheet.iter_rows(values_only=True))
             total_rows = len(all_rows)
@@ -194,13 +212,14 @@ def _extract_xlsx(content: bytes) -> str:
                 cells = [str(c) if c is not None else "" for c in row]
                 if row_idx == 1:
                     headers = cells
-                    lines.append("כותרות: " + " | ".join(cells))
+                    header_line = "כותרות: " + " | ".join(cells)
+                    lines.append(header_line)
+                    full_lines.append(header_line)
                 else:
                     if not any(c.strip() for c in cells):
                         continue
-                    # בדוק אם זו שורת סיכום
                     first_cell = cells[0].lower().strip()
-                    is_summary = first_cell in ["total", "סה\"כ", "סהכ", "sum", "totals"]
+                    is_summary = any(kw in first_cell for kw in summary_keywords)
 
                     if headers:
                         parts = []
@@ -210,12 +229,28 @@ def _extract_xlsx(content: bytes) -> str:
                                 parts.append(f"{col_name}: {c}")
                         if parts:
                             prefix = f"⭐ שורה {row_idx} (סיכום)" if is_summary else f"שורה {row_idx}"
-                            lines.append(f"{prefix}: " + " | ".join(parts))
+                            line = f"{prefix}: " + " | ".join(parts)
+                            full_lines.append(line)
+                            if is_summary:
+                                lines.append(line)
                     else:
-                        lines.append(" | ".join(cells))
+                        full_lines.append(" | ".join(cells))
 
             lines.append(f"(סה\"כ {total_rows} שורות בגיליון {sheet.title})")
-        return "\n".join(lines)
+            full_lines.append(f"(סה\"כ {total_rows} שורות בגיליון {sheet.title})")
+
+        # אם הטקסט המלא קצר מספיק — שלח הכל
+        full_text = "\n".join(full_lines)
+        if len(full_text) <= 16000:
+            return full_text
+
+        # אחרת שלח סיכום + כותרות מכל גיליון, ואז כמה שאפשר מהנתונים המלאים
+        summary_text = "\n".join(lines)
+        remaining = 16000 - len(summary_text) - 100
+        if remaining > 0:
+            return summary_text + "\n\n--- נתונים מפורטים (חלקי) ---\n" + full_text[:remaining]
+        return summary_text
+
     except Exception as e:
         logger.error(f"XLSX extraction error: {e}")
         return f"(שגיאה בקריאת XLSX: {e})"
